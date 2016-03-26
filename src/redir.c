@@ -360,11 +360,38 @@ static void remote_send_cb(EV_P_ ev_io *w, int revents)
             ev_io_stop(EV_A_ & server->recv_ctx->io);
             ev_timer_stop(EV_A_ & remote_send_ctx->watcher);
 
-            // send destaddr
             buffer_t ss_addr_to_send;
             buffer_t *abuf = &ss_addr_to_send;
             balloc(abuf, BUF_SIZE);
 
+            // send src addr
+            struct sockaddr_storage s_addr;
+            size_t src_addr_offset = 1;
+            if (getpeername(server->fd, (struct sockaddr *)&s_addr, &len) == 0) {
+                if (AF_INET6 == s_addr.ss_family) { // IPv6
+                    abuf->array[abuf->len++] = 6; // Type 4 is IPv6 address
+
+                    size_t in6_addr_len = sizeof(struct in6_addr);
+                    memcpy(abuf->array + abuf->len,
+                           &(((struct sockaddr_in6 *)&(s_addr))->sin6_addr),
+                           in6_addr_len);
+                    abuf->len += in6_addr_len;
+                    src_addr_offset += in6_addr_len;
+                } else {                          // IPv4
+                    abuf->array[abuf->len++] = 4; // Type 1 is IPv4 address
+
+                    size_t in_addr_len = sizeof(struct in_addr);
+                    memcpy(abuf->array + abuf->len,
+                           &((struct sockaddr_in *)&(s_addr))->sin_addr, in_addr_len);
+                    abuf->len += in_addr_len;
+                    src_addr_offset += in_addr_len;
+                }
+            } else {
+                // what? can't getpeername?
+                abuf->array[abuf->len++] = 0;
+            }
+
+            // send destaddr
             if (AF_INET6 == server->destaddr.ss_family) { // IPv6
                 abuf->array[abuf->len++] = 4;          // Type 4 is IPv6 address
 
@@ -399,7 +426,13 @@ static void remote_send_cb(EV_P_ ev_io *w, int revents)
             remote->buf->len += abuf->len;
             bfree(abuf);
 
+            // I don't want src addr be encrypted, so move to the offset
+            remote->buf->array += src_addr_offset;
+            remote->buf->len   -= src_addr_offset;
             int err = ss_encrypt(remote->buf, server->e_ctx, BUF_SIZE);
+            // move back
+            remote->buf->array -= src_addr_offset;
+            remote->buf->len   += src_addr_offset;
             if (err) {
                 LOGE("invalid password or cipher");
                 close_and_free_remote(EV_A_ remote);

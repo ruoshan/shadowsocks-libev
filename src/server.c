@@ -544,6 +544,18 @@ static void server_recv_cb(EV_P_ ev_io *w, int revents)
         buf->len = r;
     }
 
+    if (server->stage == 0) {
+        size_t src_addr_offset = 1;
+        if (buf->array[0] == 6) { // IPV6 src addr
+            src_addr_offset += sizeof(struct in6_addr);
+        } else if (buf->array[0] == 4) { // IPV4
+            src_addr_offset += sizeof(struct in_addr);
+        }
+        // strip the src addr
+        buf->len -= src_addr_offset;
+        memmove(buf->array, buf->array + src_addr_offset, buf->len);
+    }
+
     int err = ss_decrypt(buf, server->d_ctx, BUF_SIZE);
 
     if (err) {
